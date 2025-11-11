@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Package, Clock, AlertCircle, CheckCircle, XCircle, Settings, Key } from 'lucide-react';
+import { Send, Package, Clock, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 
 const OrderControlChat = () => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState('');
+  const [currentOrder, setCurrentOrder] = useState({});
+  const [conversationHistory, setConversationHistory] = useState([]);
   const messagesEndRef = useRef(null);
+
+  // API Key configurada no backend (variável de ambiente)
+  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -21,36 +23,14 @@ const OrderControlChat = () => {
 
   useEffect(() => {
     loadOrders();
-    loadApiKey();
+    // Mensagem de boas-vindas
+    const welcomeMsg = {
+      type: 'bot',
+      content: '👋 Olá! Estou aqui para ajudar a registrar seus pedidos.\n\nVocê pode me falar sobre um pedido de forma natural, e eu vou te guiar. Pode começar dizendo o site, ou me contar tudo de uma vez!',
+      timestamp: new Date().toISOString()
+    };
+    setMessages([welcomeMsg]);
   }, []);
-
-  const loadApiKey = async () => {
-    try {
-      const result = await window.storage.get('groq_api_key');
-      if (result && result.value) {
-        setApiKey(result.value);
-      }
-    } catch (error) {
-      console.log('API key não encontrada');
-    }
-  };
-
-  const saveApiKey = async () => {
-    try {
-      await window.storage.set('groq_api_key', tempApiKey);
-      setApiKey(tempApiKey);
-      setShowSettings(false);
-      
-      const welcomeMsg = {
-        type: 'bot',
-        content: '✅ API Key configurada com sucesso! Agora você pode começar a registrar pedidos.',
-        timestamp: new Date().toISOString()
-      };
-      setMessages([welcomeMsg]);
-    } catch (error) {
-      alert('Erro ao salvar API Key: ' + error.message);
-    }
-  };
 
   const loadOrders = async () => {
     try {
@@ -77,81 +57,134 @@ const OrderControlChat = () => {
     }
   };
 
-  const extractOrderInfo = async (text) => {
-    if (!apiKey) {
+  const processConversation = async (userMessage) => {
+    if (!GROQ_API_KEY || GROQ_API_KEY === 'COLOQUE_SUA_API_KEY_AQUI') {
       const errorMsg = {
         type: 'bot',
-        content: '⚠️ Por favor, configure sua API Key do Groq clicando no ícone de configurações.',
+        content: '⚠️ Sistema não configurado. Entre em contato com o administrador.',
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMsg]);
-      return null;
+      return;
     }
 
     setLoading(true);
+    
     try {
+      const newHistory = [
+        ...conversationHistory,
+        { role: 'user', content: userMessage }
+      ];
+
+      const orderContext = `
+Pedido atual em construção:
+${currentOrder.site ? `✅ Site: ${currentOrder.site}` : '❌ Site: (não informado)'}
+${currentOrder.du ? `✅ DU: ${currentOrder.du}` : '❌ DU: (não informado)'}
+${currentOrder.projeto ? `✅ Projeto: ${currentOrder.projeto}` : '❌ Projeto: (não informado)'}
+${currentOrder.motivo ? `✅ Motivo: ${currentOrder.motivo}` : '❌ Motivo: (não informado)'}
+`;
+
+      const systemPrompt = `Você é um assistente que ajuda a coletar informações de pedidos de forma conversacional e natural.
+
+INFORMAÇÕES NECESSÁRIAS para um pedido completo:
+- site (código do site)
+- du (número da DU)
+- projeto (código do projeto)
+- motivo (descrição do problema/motivo)
+
+SUAS REGRAS:
+1. Analise a mensagem do usuário e extraia TODAS as informações que ele mencionou
+2. Se o usuário forneceu TODAS as 4 informações necessárias, retorne JSON:
+   {"action": "complete", "data": {"site": "...", "du": "...", "projeto": "...", "motivo": "..."}}
+3. Se faltam informações, retorne JSON:
+   {"action": "ask", "message": "sua pergunta amigável aqui", "extracted": {"campo": "valor"}}
+4. Seja conversacional, amigável e direto
+5. Faça UMA pergunta por vez sobre o que está faltando
+6. Se o usuário disse "não tem" ou similar para algum campo, aceite como "N/A"
+
+${orderContext}
+
+Analise a nova mensagem e responda APENAS com JSON válido, sem markdown.`;
+
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${GROQ_API_KEY}`
         },
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',
-          messages: [{
-            role: 'user',
-            content: `Extraia as informações deste pedido e retorne APENAS um JSON válido, sem markdown, explicações ou texto adicional:
-
-${text}
-
-Retorne exatamente neste formato:
-{
-  "site": "código do site",
-  "du": "número da DU",
-  "projeto": "código do projeto",
-  "motivo": "descrição do motivo",
-  "status": "pendente"
-}`
-          }],
-          temperature: 0.1,
-          max_tokens: 500
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...newHistory
+          ],
+          temperature: 0.3,
+          max_tokens: 1000
         })
       });
 
       if (!response.ok) {
-        throw new Error('Erro na API. Verifique sua API Key.');
+        throw new Error('Erro na API do Groq.');
       }
 
       const data = await response.json();
       const content = data.choices[0].message.content;
       
-      // Remove markdown e extrai JSON
       const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
       
       if (jsonMatch) {
-        const orderData = JSON.parse(jsonMatch[0]);
-        const order = {
-          ...orderData,
-          id: Date.now().toString(),
-          timestamp: new Date().toISOString()
-        };
+        const aiResponse = JSON.parse(jsonMatch[0]);
         
-        const newOrders = [order, ...orders];
-        setOrders(newOrders);
-        await saveOrder(order);
-        
-        return order;
+        if (aiResponse.action === 'complete') {
+          const order = {
+            ...aiResponse.data,
+            id: Date.now().toString(),
+            timestamp: new Date().toISOString(),
+            status: 'pendente'
+          };
+          
+          const newOrders = [order, ...orders];
+          setOrders(newOrders);
+          await saveOrder(order);
+          
+          const botMessage = {
+            type: 'bot',
+            content: `✅ Perfeito! Pedido registrado com sucesso!\n\n📦 Site: ${order.site}\n🔖 DU: ${order.du}\n📋 Projeto: ${order.projeto}\n⚠️ Motivo: ${order.motivo}\n\n💬 Precisa registrar outro pedido?`,
+            timestamp: new Date().toISOString()
+          };
+          setMessages(prev => [...prev, botMessage]);
+          
+          setCurrentOrder({});
+          setConversationHistory([]);
+          
+        } else if (aiResponse.action === 'ask') {
+          if (aiResponse.extracted) {
+            setCurrentOrder(prev => ({ ...prev, ...aiResponse.extracted }));
+          }
+          
+          const botMessage = {
+            type: 'bot',
+            content: aiResponse.message,
+            timestamp: new Date().toISOString()
+          };
+          setMessages(prev => [...prev, botMessage]);
+          
+          setConversationHistory([
+            ...newHistory,
+            { role: 'assistant', content: content }
+          ]);
+        }
       }
+      
     } catch (error) {
       console.error('Erro ao processar:', error);
       const errorMsg = {
         type: 'bot',
-        content: '❌ Erro ao processar: ' + error.message + '\n\nVerifique se sua API Key está correta.',
+        content: '❌ Desculpe, tive um problema ao processar. Pode tentar novamente?\n\n' + error.message,
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMsg]);
-      return null;
     } finally {
       setLoading(false);
     }
@@ -166,27 +199,11 @@ Retorne exatamente neste formato:
       timestamp: new Date().toISOString()
     };
 
-    setMessages([...messages, userMessage]);
+    setMessages(prev => [...prev, userMessage]);
     const currentInput = input;
     setInput('');
 
-    const order = await extractOrderInfo(currentInput);
-
-    if (order) {
-      const botMessage = {
-        type: 'bot',
-        content: `✅ Pedido registrado com sucesso!\n\n📦 **Site:** ${order.site}\n🔖 **DU:** ${order.du}\n📋 **Projeto:** ${order.projeto}\n⚠️ **Motivo:** ${order.motivo}\n⏰ **Status:** ${order.status}`,
-        timestamp: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, botMessage]);
-    } else if (apiKey) {
-      const errorMessage = {
-        type: 'bot',
-        content: '❌ Não consegui processar este pedido. Tente novamente com o formato correto:\n\nSite: CODIGO\nDU: NUMERO\nProjeto: CODIGO\nMotivo: DESCRICAO',
-        timestamp: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    }
+    await processConversation(currentInput);
   };
 
   const handleKeyPress = (e) => {
@@ -230,102 +247,16 @@ Retorne exatamente neste formato:
     }
   };
 
-  if (showSettings) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full">
-          <div className="flex items-center mb-6">
-            <Key className="w-8 h-8 text-blue-600 mr-3" />
-            <h2 className="text-2xl font-bold text-gray-800">Configurar API Key</h2>
-          </div>
-          
-          <div className="mb-6">
-            <p className="text-gray-600 mb-4">
-              Para usar este sistema, você precisa de uma API Key <strong>gratuita</strong> do Groq:
-            </p>
-            
-            <ol className="text-sm text-gray-700 space-y-2 mb-4 list-decimal list-inside">
-              <li>Acesse: <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">console.groq.com</a></li>
-              <li>Crie uma conta gratuita</li>
-              <li>Vá em "API Keys"</li>
-              <li>Clique em "Create API Key"</li>
-              <li>Cole a chave abaixo</li>
-            </ol>
-            
-            <input
-              type="password"
-              value={tempApiKey}
-              onChange={(e) => setTempApiKey(e.target.value)}
-              placeholder="gsk_..."
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
-            />
-            
-            <div className="flex space-x-2">
-              <button
-                onClick={saveApiKey}
-                disabled={!tempApiKey.trim()}
-                className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
-              >
-                Salvar e Começar
-              </button>
-              
-              {apiKey && (
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
-                >
-                  Cancelar
-                </button>
-              )}
-            </div>
-          </div>
-          
-          <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-            <p className="text-sm text-green-800">
-              ✅ <strong>100% Gratuito</strong> - Sem cartão de crédito necessário
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Chat Area */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-blue-600 text-white p-4 shadow-lg flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold">Chat de Controle de Pedidos</h1>
-            <p className="text-sm text-blue-100">
-              {apiKey ? '🟢 Conectado - Sistema 100% Gratuito' : '🔴 Configure sua API Key'}
-            </p>
-          </div>
-          <button
-            onClick={() => {
-              setTempApiKey(apiKey);
-              setShowSettings(true);
-            }}
-            className="p-2 hover:bg-blue-700 rounded-lg transition-colors"
-            title="Configurações"
-          >
-            <Settings className="w-6 h-6" />
-          </button>
+        <div className="bg-blue-600 text-white p-4 shadow-lg">
+          <h1 className="text-xl font-bold">Chat Conversacional de Pedidos</h1>
+          <p className="text-sm text-blue-100">🟢 Sistema pronto para uso</p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 && (
-            <div className="text-center text-gray-500 mt-8">
-              <Package className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-              <p className="text-lg font-medium">
-                {apiKey ? 'Nenhuma mensagem ainda' : 'Configure sua API Key para começar'}
-              </p>
-              <p className="text-sm">
-                {apiKey ? 'Cole as informações do pedido para começar' : 'Clique no ícone de configurações acima'}
-              </p>
-            </div>
-          )}
-
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-2xl px-4 py-3 rounded-lg ${
@@ -347,7 +278,7 @@ Retorne exatamente neste formato:
             <div className="flex justify-start">
               <div className="bg-white px-4 py-3 rounded-lg shadow-md">
                 <div className="flex items-center space-x-2">
-                  <div className="animate-pulse">Processando com IA gratuita...</div>
+                  <div className="animate-pulse">Pensando...</div>
                 </div>
               </div>
             </div>
@@ -356,6 +287,18 @@ Retorne exatamente neste formato:
           <div ref={messagesEndRef} />
         </div>
 
+        {Object.keys(currentOrder).length > 0 && (
+          <div className="px-4 py-2 bg-yellow-50 border-t border-yellow-200">
+            <div className="text-xs text-yellow-800 font-medium mb-1">📝 Coletando informações:</div>
+            <div className="flex gap-2 text-xs">
+              {currentOrder.site && <span className="bg-green-100 text-green-800 px-2 py-1 rounded">✓ Site</span>}
+              {currentOrder.du && <span className="bg-green-100 text-green-800 px-2 py-1 rounded">✓ DU</span>}
+              {currentOrder.projeto && <span className="bg-green-100 text-green-800 px-2 py-1 rounded">✓ Projeto</span>}
+              {currentOrder.motivo && <span className="bg-green-100 text-green-800 px-2 py-1 rounded">✓ Motivo</span>}
+            </div>
+          </div>
+        )}
+
         <div className="p-4 bg-white border-t">
           <div className="flex space-x-2">
             <input
@@ -363,13 +306,13 @@ Retorne exatamente neste formato:
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder={apiKey ? "Cole as informações do pedido aqui..." : "Configure a API Key primeiro..."}
+              placeholder="Digite sua mensagem..."
               className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={loading || !apiKey}
+              disabled={loading}
             />
             <button
               onClick={handleSubmit}
-              disabled={loading || !input.trim() || !apiKey}
+              disabled={loading || !input.trim()}
               className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
             >
               <Send className="w-5 h-5" />
