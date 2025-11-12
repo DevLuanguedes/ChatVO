@@ -15,7 +15,7 @@ const OrderControlChat = () => {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
