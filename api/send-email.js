@@ -11,7 +11,7 @@ export default async function handler(req, res) {
 
   try {
     await resend.emails.send({
-      from: 'Pedidos <luan.ferreira@premcell.com.br>', // Troque pelo seu domínio
+      from: 'Pedidos <luan.pereira@premcell.com.br>', // Troque pelo seu domínio
       to: to,
       subject: subject,
       html: `
