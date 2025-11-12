@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Package, Clock, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { Send, Package, Clock, AlertCircle, CheckCircle, XCircle, Mail, Paperclip, X, Upload } from 'lucide-react';
 
 const OrderControlChat = () => {
   const [messages, setMessages] = useState([]);
@@ -8,9 +8,13 @@ const OrderControlChat = () => {
   const [loading, setLoading] = useState(false);
   const [currentOrder, setCurrentOrder] = useState({});
   const [conversationHistory, setConversationHistory] = useState([]);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailData, setEmailData] = useState({ to: '', files: [] });
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [lastRegisteredOrder, setLastRegisteredOrder] = useState(null);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
-  // API Key configurada no backend (variável de ambiente)
   const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 
   const scrollToBottom = () => {
@@ -23,10 +27,9 @@ const OrderControlChat = () => {
 
   useEffect(() => {
     loadOrders();
-    // Mensagem de boas-vindas
     const welcomeMsg = {
       type: 'bot',
-      content: '👋 Olá! Estou aqui para ajudar a registrar seus pedidos.\n\nVocê pode me falar sobre um pedido de forma natural, e eu vou te guiar. Pode começar dizendo o site, ou me contar tudo de uma vez!',
+      content: '👋 Olá! Estou aqui para ajudar a registrar seus pedidos.\n\nVocê pode me falar sobre um pedido de forma natural, e eu vou te guiar. Pode começar dizendo o site, ou me contar tudo de uma vez!\nSite:\nDU:\nProjeto:\nMotivo: ',
       timestamp: new Date().toISOString()
     };
     setMessages([welcomeMsg]);
@@ -57,8 +60,82 @@ const OrderControlChat = () => {
     }
   };
 
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files);
+    setEmailData(prev => ({
+      ...prev,
+      files: [...prev.files, ...files]
+    }));
+  };
+
+  const removeFile = (index) => {
+    setEmailData(prev => ({
+      ...prev,
+      files: prev.files.filter((_, i) => i !== index)
+    }));
+  };
+
+  const sendEmail = async () => {
+    if (!emailData.to.trim()) {
+      alert('Por favor, digite pelo menos um email!');
+      return;
+    }
+
+    setSendingEmail(true);
+    
+    try {
+      // Converter arquivos para base64
+      const filesBase64 = await Promise.all(
+        emailData.files.map(async (file) => {
+          const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          
+          return {
+            filename: file.name,
+            content: base64,
+            type: file.type
+          };
+        })
+      );
+
+      // Chamar API de envio de email (você vai criar isso na Vercel)
+      const response = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: emailData.to.split(',').map(e => e.trim()),
+          subject: `[CHECKPOINT] - ${lastRegisteredOrder.site} - ${lastRegisteredOrder.du} - ${lastRegisteredOrder.motivo}`,
+          order: lastRegisteredOrder,
+          attachments: filesBase64
+        })
+      });
+
+      if (!response.ok) throw new Error('Erro ao enviar email');
+
+      const botMessage = {
+        type: 'bot',
+        content: `✅ Email enviado com sucesso para: ${emailData.to}\n\n📎 ${emailData.files.length} arquivo(s) anexado(s)\n\n💬 Precisa registrar outro pedido?`,
+        timestamp: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, botMessage]);
+
+      setShowEmailModal(false);
+      setEmailData({ to: '', files: [] });
+      setLastRegisteredOrder(null);
+
+    } catch (error) {
+      alert('Erro ao enviar email: ' + error.message);
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
   const processConversation = async (userMessage) => {
-    if (!GROQ_API_KEY || GROQ_API_KEY === 'COLOQUE_SUA_API_KEY_AQUI') {
+    if (!GROQ_API_KEY) {
       const errorMsg = {
         type: 'bot',
         content: '⚠️ Sistema não configurado. Entre em contato com o administrador.',
@@ -147,11 +224,13 @@ Analise a nova mensagem e responda APENAS com JSON válido, sem markdown.`;
           const newOrders = [order, ...orders];
           setOrders(newOrders);
           await saveOrder(order);
+          setLastRegisteredOrder(order);
           
           const botMessage = {
             type: 'bot',
-            content: `✅ Perfeito! Pedido registrado com sucesso!\n\n📦 Site: ${order.site}\n🔖 DU: ${order.du}\n📋 Projeto: ${order.projeto}\n⚠️ Motivo: ${order.motivo}\n\n💬 Precisa registrar outro pedido?`,
-            timestamp: new Date().toISOString()
+            content: `✅ Perfeito! Pedido registrado com sucesso!\n\n📦 Site: ${order.site}\n🔖 DU: ${order.du}\n📋 Projeto: ${order.projeto}\n⚠️ Motivo: ${order.motivo}\n\n📧 Deseja enviar um email com evidências?`,
+            timestamp: new Date().toISOString(),
+            showEmailButton: true
           };
           setMessages(prev => [...prev, botMessage]);
           
@@ -249,6 +328,131 @@ Analise a nova mensagem e responda APENAS com JSON válido, sem markdown.`;
 
   return (
     <div className="flex h-screen bg-gray-100">
+      {/* Email Modal */}
+      {showEmailModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                  <Mail className="w-6 h-6 mr-2 text-blue-600" />
+                  Enviar Email com Evidências
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowEmailModal(false);
+                    setEmailData({ to: '', files: [] });
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              {lastRegisteredOrder && (
+                <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                  <div className="text-sm font-medium text-blue-900 mb-2">Pedido a ser enviado:</div>
+                  <div className="text-sm text-blue-800 space-y-1">
+                    <div>📦 Site: {lastRegisteredOrder.site}</div>
+                    <div>🔖 DU: {lastRegisteredOrder.du}</div>
+                    <div>📋 Projeto: {lastRegisteredOrder.projeto}</div>
+                    <div>⚠️ Motivo: {lastRegisteredOrder.motivo}</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Email(s) do destinatário
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="email@exemplo.com ou email1@exemplo.com, email2@exemplo.com"
+                    value={emailData.to}
+                    onChange={(e) => setEmailData(prev => ({ ...prev, to: e.target.value }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Separe múltiplos emails com vírgula</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Anexar Evidências (Fotos/PDFs)
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,.pdf"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center"
+                  >
+                    <Upload className="w-5 h-5 mr-2 text-gray-400" />
+                    <span className="text-gray-600">Clique para selecionar arquivos</span>
+                  </button>
+                </div>
+
+                {emailData.files.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-gray-700">
+                      Arquivos selecionados ({emailData.files.length})
+                    </div>
+                    {emailData.files.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+                        <div className="flex items-center space-x-2">
+                          <Paperclip className="w-4 h-4 text-gray-400" />
+                          <span className="text-sm text-gray-700">{file.name}</span>
+                          <span className="text-xs text-gray-500">
+                            ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => removeFile(index)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex space-x-3 pt-4">
+                  <button
+                    onClick={sendEmail}
+                    disabled={sendingEmail || !emailData.to.trim()}
+                    className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center justify-center"
+                  >
+                    {sendingEmail ? (
+                      <span className="animate-pulse">Enviando...</span>
+                    ) : (
+                      <>
+                        <Mail className="w-5 h-5 mr-2" />
+                        Enviar Email
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowEmailModal(false);
+                      setEmailData({ to: '', files: [] });
+                    }}
+                    className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Area */}
       <div className="flex-1 flex flex-col">
         <div className="bg-blue-600 text-white p-4 shadow-lg">
@@ -258,19 +462,32 @@ Analise a nova mensagem e responda APENAS com JSON válido, sem markdown.`;
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-2xl px-4 py-3 rounded-lg ${
-                msg.type === 'user' 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-white text-gray-800 shadow-md'
-              }`}>
-                <div className="whitespace-pre-wrap">{msg.content}</div>
-                <div className={`text-xs mt-1 ${
-                  msg.type === 'user' ? 'text-blue-100' : 'text-gray-500'
+            <div key={idx}>
+              <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-2xl px-4 py-3 rounded-lg ${
+                  msg.type === 'user' 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-white text-gray-800 shadow-md'
                 }`}>
-                  {new Date(msg.timestamp).toLocaleTimeString('pt-BR')}
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  <div className={`text-xs mt-1 ${
+                    msg.type === 'user' ? 'text-blue-100' : 'text-gray-500'
+                  }`}>
+                    {new Date(msg.timestamp).toLocaleTimeString('pt-BR')}
+                  </div>
                 </div>
               </div>
+              {msg.showEmailButton && (
+                <div className="flex justify-start mt-2">
+                  <button
+                    onClick={() => setShowEmailModal(true)}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center text-sm"
+                  >
+                    <Mail className="w-4 h-4 mr-2" />
+                    Sim, enviar email
+                  </button>
+                </div>
+              )}
             </div>
           ))}
 
