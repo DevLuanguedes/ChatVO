@@ -1,6 +1,6 @@
 import { Resend } from 'resend';
 
-const resend = new Resend(import.meta.env.RESEND_API_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY); // ← MUDEI AQUI
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,7 +11,7 @@ export default async function handler(req, res) {
 
   try {
     await resend.emails.send({
-      from: 'Pedidos <luan.pereira@premcell.com.br>', // Troque pelo seu domínio
+      from: 'Pedidos <onboarding@resend.dev>', // ← MUDEI AQUI (use esse para testar)
       to: to,
       subject: subject,
       html: `
@@ -36,4 +36,4 @@ export default async function handler(req, res) {
     console.error(error);
     res.status(500).json({ error: error.message });
   }
-}
+} // ← REMOVI A VÍRGULA AQUI
