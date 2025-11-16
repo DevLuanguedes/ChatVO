@@ -15,7 +15,7 @@ const OrderControlChat = () => {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API;
+  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -84,6 +84,8 @@ const OrderControlChat = () => {
     setSendingEmail(true);
     
     try {
+      console.log('🔄 Iniciando envio de email...');
+      
       // Converter arquivos para base64
       const filesBase64 = await Promise.all(
         emailData.files.map(async (file) => {
@@ -102,20 +104,33 @@ const OrderControlChat = () => {
         })
       );
 
-      // Chamar API de envio de email (você vai criar isso na Vercel)
+      console.log('📎 Arquivos convertidos:', filesBase64.length);
+
+      const payload = {
+        to: emailData.to.split(',').map(e => e.trim()),
+        subject: `[CHECKPOINT] - ${lastRegisteredOrder.site} - ${lastRegisteredOrder.du} - ${lastRegisteredOrder.motivo}`,
+        order: lastRegisteredOrder,
+        attachments: filesBase64
+      };
+
+      console.log('📤 Enviando para /api/send-email:', payload);
+
+      // Chamar API de envio de email
       const response = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: emailData.to.split(',').map(e => e.trim()),
-          subject: `[CHECKPOINT] - ${lastRegisteredOrder.site} - ${lastRegisteredOrder.du} - ${lastRegisteredOrder.motivo}`,
-          order: lastRegisteredOrder,
-          attachments: filesBase64
-        })
+        body: JSON.stringify(payload)
       });
 
-      if (!response.ok) throw new Error('Erro ao enviar email');
+      console.log('📥 Response status:', response.status);
 
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Erro ao enviar email');
+      }
+
+      const result = await response.json();
+      
       const botMessage = {
         type: 'bot',
         content: `✅ Email enviado com sucesso para: ${emailData.to}\n\n📎 ${emailData.files.length} arquivo(s) anexado(s)\n\n💬 Precisa registrar outro pedido?`,
@@ -128,7 +143,8 @@ const OrderControlChat = () => {
       setLastRegisteredOrder(null);
 
     } catch (error) {
-      alert('Erro ao enviar email: ' + error.message);
+      console.error('Erro completo:', error);
+      alert('Erro ao enviar email: ' + error.message + '\n\nVeja o console para mais detalhes (F12)');
     } finally {
       setSendingEmail(false);
     }
